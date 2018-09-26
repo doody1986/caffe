@@ -48,13 +48,12 @@ enum FFTPlanType {
   FFT_MANY
 };
 
-enum FFTDirction {
-  FFT = CUFFT_FORWARD,
-  IFFT = CUFFT_INVERSE
-};
-
 inline void createFFTPlan(cufftHandle *plan) {
   CUFFT_CHECK(cufftCreate(plan));
+}
+
+inline void destroyFFTPlan(cufftHandle *plan) {
+  CUFFT_CHECK(cufftDestroy(*plan));
 }
 
 inline size_t setFFTPlan(cufftHandle *plan, FFTPlanType plan_type, int nx, FFTType type, int batch) {
