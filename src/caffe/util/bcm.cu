@@ -61,7 +61,11 @@ void BCMForward(float *fft_w, float *fft_x, float *y,
   if ( cudaSuccess != err )
       std::cout << "Error: " << cudaGetErrorString(err) << std::endl;
 }
-
+template <>
+void BCMForward(double *fft_w, double *fft_x, double *y,
+                int n, int p, int q, int k) {
+// Do nothing
+}
 
 __global__ void BCMBackwardWeightKernel(cuComplex *fft_dy,
                                         cuComplex *fft_x, cuComplex *dw,
@@ -119,6 +123,12 @@ void BCMBackwardWeight(float *fft_dy, float *fft_x, float *dw,
       std::cout << "Error: " << cudaGetErrorString(err) << std::endl;
 }
 
+template <>
+void BCMBackwardWeight(double *fft_dy, double *fft_x, double *dw,
+                int n, int p, int q, int k) {
+// Do nothing
+}
+
 __global__ void BCMBackwardDataKernel(cuComplex *fft_dy,
                                         cuComplex *fft_w, cuComplex *dx,
                                         int n, int p, int q, int k) {
@@ -159,7 +169,7 @@ __global__ void BCMBackwardDataKernel(cuComplex *fft_dy,
 }
 
 template <>
-void BCMBackwardData(cuComplex *fft_dy, cuComplex *fft_w, cuComplex *dx,
+void BCMBackwardData(float *fft_dy, float *fft_w, float *dx,
                 int n, int p, int q, int k) {
   int block_size = (k - 1) * 2;
   int tid_q = 1024 / block_size > q ? q : 1024 / block_size; // must be power of 2
@@ -172,6 +182,12 @@ void BCMBackwardData(cuComplex *fft_dy, cuComplex *fft_w, cuComplex *dx,
   cudaError err = cudaGetLastError();
   if ( cudaSuccess != err )
       std::cout << "Error: " << cudaGetErrorString(err) << std::endl;
+}
+
+template <>
+void BCMBackwardData(double *fft_dy, double *fft_w, double *dx,
+                int n, int p, int q, int k) {
+// Do nothing
 }
 
 }  // namespace caffe
