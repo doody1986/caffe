@@ -8,7 +8,7 @@ namespace caffe {
 template <typename Dtype>
 void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) {
-  const int num_output = this->layer_param_.inner_product_param().num_output();
+  const int num_output = this->layer_param_.inner_product_bcm_param().num_output();
   bias_term_ = this->layer_param_.inner_product_bcm_param().bias_term();
   transpose_ = this->layer_param_.inner_product_bcm_param().transpose();
   N_ = num_output;
@@ -18,7 +18,10 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   // length K_ vector. For example, if bottom[0]'s shape is (N, C, H, W),
   // and axis == 1, N inner products with dimension CHW are performed.
   K_ = bottom[0]->count(axis);
-
+  // The first "axis" dimensions are independent inner products; the total
+  // number of these is M_, the product over these dimensions.
+  M_ = bottom[0]->count(0, axis);
+  n_ = M_;
   // obtain BCM specific parameters for weights
   k_ = this->layer_param_.inner_product_bcm_param().block_size();
   fft_k_ = k_ / 2 + 1;
@@ -29,11 +32,11 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   }
 
   if (transpose_) {
-    p_ = N_ / k_;
-    q_ = K_ / k_;
-  } else {
     p_ = K_ / k_;
     q_ = N_ / k_;
+  } else {
+    p_ = N_ / k_;
+    q_ = K_ / k_;
   }
 
   // Check if we need to set up the weights
@@ -47,8 +50,8 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
     }
     // Initialize the weights
     vector<int> weight_shape(3);
-    weight_shape[0] = q_;
-    weight_shape[1] = p_;
+    weight_shape[0] = p_;
+    weight_shape[1] = q_;
     weight_shape[2] = k_;
 
     this->blobs_[0].reset(new Blob<Dtype>(weight_shape));
@@ -65,34 +68,8 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
       bias_filler->Fill(this->blobs_[1].get());
     }
   }  // parameter initialization
-  this->param_propagate_down_.resize(this->blobs_.size(), true);
-}
 
-template <typename Dtype>
-void InnerProductBCMLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top) {
-  // Figure out the dimensions
-  const int axis = bottom[0]->CanonicalAxisIndex(
-      this->layer_param_.inner_product_bcm_param().axis());
-  const int new_K = bottom[0]->count(axis);
-  CHECK_EQ(K_, new_K)
-      << "Input size incompatible with inner product parameters.";
-  // The first "axis" dimensions are independent inner products; the total
-  // number of these is M_, the product over these dimensions.
-  M_ = bottom[0]->count(0, axis);
-  n_ = M_;
-  // The top shape will be the bottom shape with the flattened axes dropped,
-  // and replaced by a single axis with dimension num_output (N_).
-  vector<int> top_shape = bottom[0]->shape();
-  top_shape.resize(axis + 1);
-  top_shape[axis] = N_;
-  top[0]->Reshape(top_shape);
-  // Set up the bias multiplier
-  if (bias_term_) {
-    vector<int> bias_shape(1, M_);
-    bias_multiplier_.Reshape(bias_shape);
-    caffe_set(M_, Dtype(1), bias_multiplier_.mutable_cpu_data());
-  }
+  this->param_propagate_down_.resize(this->blobs_.size(), true);
   // Set up FFT plan
   cufft::createFFTPlan(&w_plan_);
   cufft::setFFTPlan(&w_plan_, cufft::FFT_1D, k_, cufft::R2C, p_ * q_);
@@ -131,6 +108,30 @@ void InnerProductBCMLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   err = cudaMalloc(&(this->sum_y_), n_ * p_ * fft_k_ * 2 * sizeof(Dtype));
   if (err != cudaSuccess) {
     LOG(FATAL) << "Not enough memory";
+  }
+}
+
+template <typename Dtype>
+void InnerProductBCMLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top) {
+  // Figure out the dimensions
+  const int axis = bottom[0]->CanonicalAxisIndex(
+      this->layer_param_.inner_product_bcm_param().axis());
+  const int new_K = bottom[0]->count(axis);
+  CHECK_EQ(K_, new_K)
+      << "Input size incompatible with inner product parameters.";
+
+  // The top shape will be the bottom shape with the flattened axes dropped,
+  // and replaced by a single axis with dimension num_output (N_).
+  vector<int> top_shape = bottom[0]->shape();
+  top_shape.resize(axis + 1);
+  top_shape[axis] = N_;
+  top[0]->Reshape(top_shape);
+  // Set up the bias multiplier
+  if (bias_term_) {
+    vector<int> bias_shape(1, M_);
+    bias_multiplier_.Reshape(bias_shape);
+    caffe_set(M_, Dtype(1), bias_multiplier_.mutable_cpu_data());
   }
 }
 
