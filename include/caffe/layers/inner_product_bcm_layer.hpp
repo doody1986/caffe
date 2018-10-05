@@ -44,6 +44,9 @@ class InnerProductBCMLayer : public Layer<Dtype> {
   int M_;
   int K_;
   int N_;
+  // Number of output channels and input channels should be power of 2
+  int bcm_N_;
+  int bcm_K_;
   
   // BCM related
   int n_;
@@ -67,6 +70,10 @@ class InnerProductBCMLayer : public Layer<Dtype> {
   Dtype *sum_w_;
   Dtype *sum_x_;
   Dtype *sum_y_;
+
+  // Temp space for upsized data
+  Dtype *upsized_bottom_;
+  Dtype *upsized_top_diff_;
 
   bool bias_term_;
   Blob<Dtype> bias_multiplier_;

@@ -12,8 +12,20 @@ void InnerProductBCMLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom
   const Dtype* bottom_data = bottom[0]->gpu_data();
   Dtype* top_data = top[0]->mutable_gpu_data();
   const Dtype* weight = this->blobs_[0]->gpu_data();
+
+  // Insert additional 0
+  if (K_ != bcm_K_) {
+    CUDA_CHECK(cudaMemset(upsized_bottom_, 0, bcm_K_ * M_ * sizeof(Dtype)));
+    for (int m = 0; m < M_; m++) {
+      CUDA_CHECK(cudaMemcpy(upsized_bottom_ + m * bcm_K_, bottom_data + m * K_,
+                 K_ * sizeof(Dtype), cudaMemcpyDeviceToDevice));
+    }
+  }
   cufft::fft<Dtype>(&w_plan_, (Dtype *)weight, fft_w_);
-  cufft::fft<Dtype>(&x_plan_, (Dtype *)bottom_data, fft_x_);
+  if (K_ != bcm_K_)
+    cufft::fft<Dtype>(&x_plan_, (Dtype *)upsized_bottom_, fft_x_);
+  else
+    cufft::fft<Dtype>(&x_plan_, (Dtype *)bottom_data, fft_x_);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   BCMForward<Dtype>(fft_w_,
@@ -41,11 +53,23 @@ template <typename Dtype>
 void InnerProductBCMLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     const vector<bool>& propagate_down,
     const vector<Blob<Dtype>*>& bottom) {
+  if (N_ != bcm_N_) {
+    CUDA_CHECK(cudaMemset(upsized_top_diff_, 0, bcm_N_ * M_ * sizeof(Dtype)));
+  }
   if (this->param_propagate_down_[0]) {
     const Dtype* top_diff = top[0]->gpu_diff();
     const Dtype* bottom_data = bottom[0]->gpu_data();
+    if (N_ != bcm_N_) {
+      for (int m = 0; m < M_; m++) {
+       CUDA_CHECK(cudaMemcpy(upsized_top_diff_ + m * bcm_N_, top_diff + m * N_,
+                  K_ * sizeof(Dtype), cudaMemcpyDeviceToDevice));
+      }
+    }
     // Gradient with respect to weight
-    cufft::fft<Dtype>(&y_plan_, (Dtype *)top_diff, fft_y_);
+    if (N_ != bcm_N_)
+      cufft::fft<Dtype>(&y_plan_, (Dtype *)upsized_top_diff_, fft_y_);
+    else
+      cufft::fft<Dtype>(&y_plan_, (Dtype *)top_diff, fft_y_);
     // The FFT of x can be saved
     CUDA_CHECK(cudaDeviceSynchronize());
     BCMBackwardWeight<Dtype>(fft_y_,

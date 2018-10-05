@@ -2,6 +2,7 @@
 
 #include "caffe/filler.hpp"
 #include "caffe/layers/inner_product_bcm_layer.hpp"
+#include "caffe/util/bcm.hpp"
 
 namespace caffe {
 
@@ -21,22 +22,29 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   // The first "axis" dimensions are independent inner products; the total
   // number of these is M_, the product over these dimensions.
   M_ = bottom[0]->count(0, axis);
-  n_ = M_;
+  n_ = M_; // Batch size
   // obtain BCM specific parameters for weights
   k_ = this->layer_param_.inner_product_bcm_param().block_size();
   fft_k_ = k_ / 2 + 1;
 
-  // Input dimension limitation (FOR NOW)
-  if (N_ % k_ != 0 || k_ % k_) {
-    LOG(FATAL) << "Input is not compatible with block size";
-  }
+  // Block size and batch size limitation
+  if (!IsPowerOf2((Dtype)k_)) LOG(FATAL) << "Block size is not a power of 2";
+  if (K_ < k_ || M_ < k_ || N_ < k_) LOG(FATAL) << "Block size is not appropriate";
+  if (M_ % k_ != 0) LOG(FATAL) << "Batch size is not power of 2";
+  // dimension adjustment
+  bcm_N_ = N_;
+  bcm_K_ = K_;
+  if (N_ % k_ != 0)
+    bcm_N_ = FindNextPowerOf2((Dtype)N_);
+  if (K_ % k_ != 0)
+    bcm_K_ = FindNextPowerOf2((Dtype)K_);
 
   if (transpose_) {
-    p_ = K_ / k_;
-    q_ = N_ / k_;
+    p_ = bcm_K_ / k_;
+    q_ = bcm_N_ / k_;
   } else {
-    p_ = N_ / k_;
-    q_ = K_ / k_;
+    p_ = bcm_N_ / k_;
+    q_ = bcm_K_ / k_;
   }
 
   // Check if we need to set up the weights
@@ -109,6 +117,13 @@ void InnerProductBCMLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
   if (err != cudaSuccess) {
     LOG(FATAL) << "Not enough memory";
   }
+
+  if (K_ != bcm_K_) {
+    CUDA_CHECK(cudaMalloc(&upsized_bottom_, bcm_K_ * M_ * sizeof(Dtype)));
+  }
+  if (N_ != bcm_N_) {
+    CUDA_CHECK(cudaMalloc(&upsized_top_diff_, bcm_N_ * M_ * sizeof(Dtype)));
+  }
 }
 
 template <typename Dtype>
@@ -162,6 +177,11 @@ InnerProductBCMLayer<Dtype>::~InnerProductBCMLayer() {
   cudaFree(sum_w_);
   cudaFree(sum_x_);
   cudaFree(sum_y_);
+  // Free the temp space
+  if (!upsized_bottom_)
+    CUDA_CHECK(cudaFree(upsized_bottom_));
+  if (!upsized_top_diff_)
+    CUDA_CHECK(cudaFree(upsized_top_diff_));
 }
 
 #ifdef CPU_ONLY
